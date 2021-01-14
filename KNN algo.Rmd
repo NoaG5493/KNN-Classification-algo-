@@ -1,0 +1,243 @@
+ 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r warning=FALSE}
+set.seed(555)
+
+library("ggplot2")
+library("gridExtra")
+library("fastDummies")
+library("Metrics")
+library("ggpubr")
+library("tidyverse")
+library("rpart")
+
+library("fBasics")
+library("caret")
+library("rattle")
+library("FNN")
+library("scales")
+library("reshape2")
+
+
+
+```
+
+Reading Pisa dataset
+```{r warning=FALSE}
+dataset <- read.csv("pisa_israel_2018_fortargil.csv")
+```
+
+
+KNN algo
+
+#### Data preprossesing
+
+Before starting the data analysis I will so some data prepreprossecing - that will help me to avoid some upcoming problems.
+
+Missing values
+
+```{r warning=FALSE}
+#Check which columns have missing values
+
+cols_missing <- names(which(colSums(is.na(dataset))>0))
+print(paste0("Number of columns with missing values before NAs fill: ",length(cols_missing)))
+```
+
+```{r warning=FALSE}
+#Computing all missing values to be the avg of its column.
+
+for (i in cols_missing) {
+  dataset[[i]] = ifelse(is.na(dataset[[i]]),
+                     ave(dataset[[i]]
+, FUN = function(x) mean(x, na.rm = TRUE)),
+                     dataset[[i]])
+}
+
+missing_check <- names(which(colSums(is.na(dataset))>0))
+print(paste0("Number of columns with missing values after NAs fill: ",length(missing_check)))
+```
+
+The first step in the pre prossecing was to look which columns have NAs values.
+Becouse I saw that all of those columns are numeric (and not binary or categorical) I chose to fill their NAs with the mean value of each column.
+
+
+Convert catagorical data to dummies variables
+
+```{r warning=FALSE}
+for (val in unique(dataset$System)){
+        unique_values = dataset[dataset$System==val,]
+       }
+       dataset[dataset$System==val,] = unique_values
+     
+    dataset <- dummy_columns(dataset, select_columns = c( 'System', 'LANGN'), remove_first_dummy = TRUE, remove_selected_columns = TRUE)
+``` 
+
+The second step was to find the categorical variables and transform them to dummies variables, in order to do this I was helped the FastDummies library.
+
+ 
+Scales all numeric values into zero to one scale
+
+```{r warning=FALSE}
+##I used this page in order to do the next scaling https://stackoverflow.com/questions/5665599/range-standardization-0-to-1-in-r. 
+
+scale_0_to_1 <- function(x){(x-min(x))/(max(x)-min(x))}
+
+for (col in colnames(dataset)[2:length(colnames(dataset))]){dataset[[col]] = scale_0_to_1(dataset[[col]])}
+
+```
+
+Last step was to do feature scaling - to scale the data to have the same range - what helps me later to calculate more accourate distance between the students.
+
+```{r warning=FALSE}
+print("Summary of dataset after preprossecing: ")
+summary(dataset)
+```
+
+
+In this summary we see the data after the preproccesing - we can see that there is no Nas anymore, all the catergorical became Dummis and all the precitors are scaled from zero to one.
+
+
+Distance functions based on class and students levels:
+
+```{r warning=FALSE}
+student_levels <- c('AGE', 'PAREDINT', 'EFFORT1', 'DURECEC', 'ESCS', 'JOYREAD', 'DISCLIMA', 'TEACHSUP','LANGN_171','LANGN_313','LANGN_422','LANGN_493','LANGN_500','LANGN_614','LANGN_825', 'LANGN_999')
+
+class_levels <- c('CLSIZE', 'STAFFSHORT', 'EDUSHORT', 'TOTAT', 'STRATIO', 'System_Israel Hebrew Religious', 'System_Israel Hebrew Secular', 'System_Israel Ultra Orthodox Girls')
+
+print(paste("student levels: ",str(student_levels)))
+print(paste("class levels: ",str(class_levels)))
+```
+First step in order to calculate the distance between the two group was to find manually the class and students levels, as showed above.
+
+
+Distance between students levels and class levels:
+
+```{r warning=FALSE}
+
+student_level_d <- function(train,test, levels = student_levels){
+    train <- train[,student_levels]
+    test <- test[,student_levels]
+    student_d <- apply(test, 1, function(x) apply(train, 1, function(y) sqrt(crossprod(x-y))))
+    return(student_d)
+}
+
+class_level_d <- function(train, test, levels =class_levels){
+    train <- train[,class_levels]
+    test <- test[,class_levels]
+    class_d <- apply(test, 1, function(x) apply(train, 1, function(y) sqrt(crossprod(x-y))))
+    return(class_d)
+}
+```
+
+In order to build the distance functions I was helped by this link - 
+https://stackoverflow.com/questions/57823228/how-to-use-apply-function-to-calculate-the-distance-between-two-matrices
+
+
+KNN algorithm 
+
+```{r warning=FALSE}
+
+KNN_algo <- function(k, d_student, d_class, a, train, test){
+
+  dist <- a*d_student(train, test, student_levels) + (1-a)* d_class(train, test, class_levels)
+  
+  #taking only the k nearest nighboures
+  knn <- head(sort(dist ,index.return = TRUE)$ix,k)
+  
+  #taking the mean of thier values.
+  knn_p <- apply(train[knn, 1, drop=F],MARGIN = 2 ,FUN =  mean)
+  
+  return(as.numeric(knn_p))
+}
+
+ind_train <- sample(nrow(dataset),ceiling(nrow(dataset)*0.8),replace=FALSE)
+ train <- dataset[ind_train,]
+ test <- dataset[-ind_train,]
+
+```
+
+This function gets a k value which represnt how many nearest nighboruos we are based on, the two distance function, an a which represnt the wieght of the student / class distance, the train and the test datasets.
+
+The first step is to calculate the full distance based on the furmula that we got in the ecxercise, after having the all points ditance I sorted it in order to get the most closest point, and saved in the knn val the k closest neighbours.
+last step was to calculate the mean of those knn and to return it.
+
+
+Errors functions for different k & a values
+
+```{r warning=FALSE}
+set.seed(555)
+
+error_fun <- function(dataset, ks, as){
+ ind_train <- sample(nrow(dataset),ceiling(nrow(dataset)*0.8),replace=FALSE)
+ train <- dataset[ind_train,]
+ test <- dataset[-ind_train,]
+        errors <- c()
+        for (i in 1:nrow(test)){
+           pred <- KNN_algo(k = ks,student_level_d, class_level_d, a = as, train , test[i,])
+           rse <- rmse(test[i, 1],pred)
+           errors <- c(errors, rse)
+        }
+      return (mean(unlist(errors)))
+      }
+
+
+
+```
+This function gets a dataset, k and a. first it's deviding the data into train and test, than it goes through the test rows and find the predicted value for each test point, after that it finds the rmse between specific point to its predicted value and at the end return the mean of the rmse list for this test set.
+
+
+Create a df with the errors values for different k's and a's: 
+```{r warning=FALSE}
+set.seed(555)
+
+
+ks= c(1,3,5,9)
+as= c(0.1,0.3,0.5,0.9)
+
+ errors <- matrix(nrow =length(ks), ncol=length(as))
+ for(k in 1:length(ks)){
+    for (a in 1:length(as)){
+              errors[k,a] <- error_fun(dataset,ks[k],as[a])
+    }}
+ 
+ errors <- as.data.frame(errors)
+ rownames(errors) <- ks
+ colnames(errors) <- as
+ 
+```
+
+In this part I chose four values for each a and k, than I created a matrix to save the rmse for each a and k combination, based on the function above.
+
+Plot of the rmse of all the k and a combinations.
+
+```{r warning=FALSE}
+errors_p <- errors %>%
+  
+  tibble::rownames_to_column() %>%
+  
+  tidyr::gather(value, colname,-rowname)
+
+  colnames(errors_p) <- c('ks', 'as', 'error')
+
+ggplot(errors_p, aes(x = as.factor(ks), y = as.factor(as), fill = error)) +
+  geom_tile() +
+  theme(plot.title = element_text(hjust = 0.5))+
+  scale_fill_gradient(low="green4", high="lightgreen") +
+  labs( x= 'K', y = 'a', title = "rmse values for diffarent K's and a's")
+```
+
+
+In order to do this graph I used this link - https://monashbioinformaticsplatform.github.io/r-more/topics/tidyverse.html
+
+In this fig we see an heatmap of the estimated errors for different values of a's and k's.
+I chose to color the smallest errors value in stronger color then the greater errors becouse it represent a better prediction.
+we can see that in k=1, the a doesnt ifluence much on the graph and we get the weekest prediction, the other three options of k get much better(lower) rmse's values, with an advantage to k=9,a=0.3. 
+
+About the comparison between the rmse values to the sd of PVread score (sd(dataset$PVREAD) : 120.4118
+), I can say that the rmse's whole range is smaller then the sd, what means that the model works well, beacouse the explainable variance is greater then the unexplainable variance in this model. The lower rmse we'll get, the better the model will be.
+
